@@ -30,6 +30,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -38,7 +39,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TimePicker
 import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -519,8 +522,8 @@ private fun StartEditor(initial: Int, onBack: () -> Unit, onSave: (Int) -> Strin
         Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Text("This is the earliest time you can begin planned activities.", color = Muted, textAlign = TextAlign.Center)
             Spacer(Modifier.height(32.dp))
-            ManualTimePicker(minute = minute, onChange = { minute = it })
-            Text("Tap the hour or minute to change it.", color = Muted, fontSize = 13.sp)
+            DialTimePickerField(minute = minute, onChange = { minute = it })
+            Text("Tap the time to open the Android time picker.", color = Muted, fontSize = 13.sp)
             Spacer(Modifier.height(16.dp))
             OutlinedButton(onClick = {
                 val now = LocalTime.now()
@@ -536,111 +539,57 @@ private fun StartEditor(initial: Int, onBack: () -> Unit, onSave: (Int) -> Strin
     }
 }
 
-private enum class ClockPart { HOUR, MINUTE }
-
 @Composable
-private fun ManualTimePicker(minute: Int, onChange: (Int) -> Unit) {
-    var selectedPart by remember { mutableStateOf<ClockPart?>(null) }
-    val hour = minute / 60
-    val minutePart = minute % 60
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Surface(
-            onClick = { selectedPart = ClockPart.HOUR },
-            color = Sage,
-            shape = RoundedCornerShape(16.dp)
-        ) {
-            Column(Modifier.padding(horizontal = 24.dp, vertical = 14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("HOUR", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                Text("%02d".format(hour), fontSize = 42.sp, fontWeight = FontWeight.Bold)
-            }
-        }
-        Text(":", fontSize = 38.sp, fontWeight = FontWeight.Bold)
-        Surface(
-            onClick = { selectedPart = ClockPart.MINUTE },
-            color = Sage,
-            shape = RoundedCornerShape(16.dp)
-        ) {
-            Column(Modifier.padding(horizontal = 24.dp, vertical = 14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("MINUTE", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                Text("%02d".format(minutePart), fontSize = 42.sp, fontWeight = FontWeight.Bold)
-            }
-        }
+@OptIn(ExperimentalMaterial3Api::class)
+private fun DialTimePickerField(minute: Int, onChange: (Int) -> Unit) {
+    var showPicker by remember { mutableStateOf(false) }
+    Surface(
+        onClick = { showPicker = true },
+        color = Sage,
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Text(
+            PlannerEngine.formatTime(minute),
+            modifier = Modifier.padding(horizontal = 34.dp, vertical = 16.dp),
+            fontSize = 42.sp,
+            fontWeight = FontWeight.Bold
+        )
     }
-
-    selectedPart?.let { part ->
-        val choices = if (part == ClockPart.HOUR) (0..23).toList() else (0..55 step 5).toList()
-        AlertDialog(
-            onDismissRequest = { selectedPart = null },
-            title = { Text(if (part == ClockPart.HOUR) "Choose hour" else "Choose minute") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    choices.chunked(4).forEach { rowChoices ->
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            rowChoices.forEach { choice ->
-                                val isSelected = if (part == ClockPart.HOUR) choice == hour else choice == minutePart
-                                if (isSelected) {
-                                    Button(
-                                        onClick = {
-                                            onChange(if (part == ClockPart.HOUR) choice * 60 + minutePart else hour * 60 + choice)
-                                            selectedPart = null
-                                        },
-                                        modifier = Modifier.weight(1f)
-                                    ) { Text("%02d".format(choice)) }
-                                } else {
-                                    OutlinedButton(
-                                        onClick = {
-                                            onChange(if (part == ClockPart.HOUR) choice * 60 + minutePart else hour * 60 + choice)
-                                            selectedPart = null
-                                        },
-                                        modifier = Modifier.weight(1f)
-                                    ) { Text("%02d".format(choice)) }
-                                }
-                            }
-                            repeat(4 - rowChoices.size) { Spacer(Modifier.weight(1f)) }
-                        }
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { selectedPart = null }) { Text("Close") } }
+    if (showPicker) {
+        DialTimePickerDialog(
+            initialMinute = minute,
+            onDismiss = { showPicker = false },
+            onConfirm = {
+                onChange(it)
+                showPicker = false
+            }
         )
     }
 }
 
 @Composable
-private fun TimeStepper(minute: Int, onChange: (Int) -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        OutlinedButton(
-            onClick = { onChange((minute - 10 + 1440) % 1440) },
-            modifier = Modifier.weight(1f),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp)
-        ) { Text("− 10") }
-        OutlinedButton(
-            onClick = { onChange((minute - 5 + 1440) % 1440) },
-            modifier = Modifier.weight(1f),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp)
-        ) { Text("− 5") }
-        Text(
-            PlannerEngine.formatTime(minute),
-            fontSize = 34.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.weight(1.5f),
-            textAlign = TextAlign.Center
-        )
-        OutlinedButton(
-            onClick = { onChange((minute + 5) % 1440) },
-            modifier = Modifier.weight(1f),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp)
-        ) { Text("+ 5") }
-        OutlinedButton(
-            onClick = { onChange((minute + 10) % 1440) },
-            modifier = Modifier.weight(1f),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp)
-        ) { Text("+ 10") }
-    }
+@OptIn(ExperimentalMaterial3Api::class)
+private fun DialTimePickerDialog(initialMinute: Int, onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
+    val pickerState = rememberTimePickerState(
+        initialHour = initialMinute / 60,
+        initialMinute = initialMinute % 60,
+        is24Hour = true
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Choose time") },
+        text = {
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                TimePicker(state = pickerState)
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = {
+            Button(onClick = { onConfirm(pickerState.hour * 60 + pickerState.minute) }) {
+                Text("Set time")
+            }
+        }
+    )
 }
 
 @Composable
@@ -958,8 +907,7 @@ private fun AnchorEditor(
             OutlinedTextField(value = title, onValueChange = { title = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Anchor title") }, placeholder = { Text("Appointment") })
             Spacer(Modifier.height(24.dp))
             SectionLabel("START TIME")
-            TimeStepper(time) { time = it }
-            Text("Choose the closest earlier time if the exact time is unavailable.", color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center)
+            DialTimePickerField(time) { time = it }
             Spacer(Modifier.height(24.dp))
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 Checkbox(checked = hasDuration, onCheckedChange = { hasDuration = it })
