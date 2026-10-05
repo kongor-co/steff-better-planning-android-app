@@ -608,10 +608,38 @@ private fun ManualTimePicker(minute: Int, onChange: (Int) -> Unit) {
 
 @Composable
 private fun TimeStepper(minute: Int, onChange: (Int) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-        OutlinedButton(onClick = { onChange((minute - 5 + 1440) % 1440) }) { Text("− 5") }
-        Text(PlannerEngine.formatTime(minute), fontSize = 42.sp, fontWeight = FontWeight.Bold)
-        OutlinedButton(onClick = { onChange((minute + 5) % 1440) }) { Text("+ 5") }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        OutlinedButton(
+            onClick = { onChange((minute - 10 + 1440) % 1440) },
+            modifier = Modifier.weight(1f),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp)
+        ) { Text("− 10") }
+        OutlinedButton(
+            onClick = { onChange((minute - 5 + 1440) % 1440) },
+            modifier = Modifier.weight(1f),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp)
+        ) { Text("− 5") }
+        Text(
+            PlannerEngine.formatTime(minute),
+            fontSize = 34.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.weight(1.5f),
+            textAlign = TextAlign.Center
+        )
+        OutlinedButton(
+            onClick = { onChange((minute + 5) % 1440) },
+            modifier = Modifier.weight(1f),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp)
+        ) { Text("+ 5") }
+        OutlinedButton(
+            onClick = { onChange((minute + 10) % 1440) },
+            modifier = Modifier.weight(1f),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp)
+        ) { Text("+ 10") }
     }
 }
 
@@ -940,7 +968,7 @@ private fun AnchorEditor(
                     Text("Required when another Anchor follows", color = Muted, fontSize = 12.sp)
                 }
             }
-            if (hasDuration) DurationStepper(duration) { duration = it.coerceIn(5, 415) }
+            if (hasDuration) DurationStepper(duration, minValue = 5) { duration = it.coerceIn(5, 415) }
             error?.let { ErrorText(it) }
             Spacer(Modifier.weight(1f))
             if (existing != null) {
@@ -1069,12 +1097,59 @@ private fun SectionLabel(text: String) {
 }
 
 @Composable
-private fun DurationStepper(value: Int, onChange: (Int) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        OutlinedButton(onClick = { onChange(value - 5) }, enabled = value > 0) { Text("− 5") }
-        Text(PlannerEngine.formatDuration(value), fontSize = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
-        OutlinedButton(onClick = { onChange(value + 5) }, enabled = value < 415) { Text("+ 5") }
+private fun DurationStepper(value: Int, minValue: Int = 0, onChange: (Int) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            OutlinedButton(
+                onClick = { onChange(value - 10) },
+                enabled = value - 10 >= minValue,
+                modifier = Modifier.weight(1f),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp)
+            ) { Text("− 10") }
+            OutlinedButton(
+                onClick = { onChange(value - 5) },
+                enabled = value - 5 >= minValue,
+                modifier = Modifier.weight(1f),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp)
+            ) { Text("− 5") }
+            Text(
+                PlannerEngine.formatDuration(value),
+                fontSize = 25.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1.5f),
+                textAlign = TextAlign.Center
+            )
+            OutlinedButton(
+                onClick = { onChange(value + 5) },
+                enabled = value + 5 <= 415,
+                modifier = Modifier.weight(1f),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp)
+            ) { Text("+ 5") }
+            OutlinedButton(
+                onClick = { onChange(value + 10) },
+                enabled = value + 10 <= 415,
+                modifier = Modifier.weight(1f),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp)
+            ) { Text("+ 10") }
+        }
+        Text("QUICK CHOICES", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        ScrollChoice(
+            values = listOf(15, 30, 45, 60, 90, 120),
+            selected = value,
+            onSelect = onChange
+        ) { presetDurationLabel(it) }
     }
+}
+
+private fun presetDurationLabel(minutes: Int): String = when (minutes) {
+    60 -> "1 h"
+    90 -> "1 h 30 min"
+    120 -> "2 h"
+    else -> "$minutes min"
 }
 
 @Composable
