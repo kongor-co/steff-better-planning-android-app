@@ -59,6 +59,7 @@ class PlanStore(context: Context) {
         put("pauseMinutes", activity.pauseMinutes)
         put("windowEndAnchorId", activity.windowEndAnchorId)
         put("templateId", activity.templateId ?: JSONObject.NULL)
+        put("completed", activity.completed)
     }
 
     private fun decode(json: JSONObject): Plan {
@@ -103,7 +104,8 @@ class PlanStore(context: Context) {
         demandingness = Demandingness.valueOf(item.getString("demandingness")),
         pauseMinutes = item.getInt("pauseMinutes"),
         windowEndAnchorId = item.getString("windowEndAnchorId"),
-        templateId = if (item.isNull("templateId")) null else item.getString("templateId")
+        templateId = if (item.isNull("templateId")) null else item.getString("templateId"),
+        completed = item.optBoolean("completed", false)
     )
 
     private fun JSONArray.objects(): List<JSONObject> = (0 until length()).map(::getJSONObject)

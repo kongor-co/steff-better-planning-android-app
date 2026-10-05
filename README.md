@@ -4,7 +4,8 @@ Safe Start is an offline Android planner for people who underestimate time. It s
 
 ## Included in the MVP
 
-- One or more fixed-time Anchors and independent planning windows
+- One continuous timeline with one or more fixed-time Anchors
+- Capacity enforcement for each time segment between Anchors
 - Required Tasks and lower-priority Optional activities
 - Complexity-based buffers from 20% to 60%
 - Demandingness-based pause suggestions
@@ -12,7 +13,8 @@ Safe Start is an offline Android planner for people who underestimate time. It s
 - Backwards scheduling with unused time kept at the start
 - Per-window and overall capacity summaries
 - Warning state from 80% and a hard block above 100%
-- Manual activity ordering and movement between windows
+- Manual activity ordering and movement across Anchors
+- Persistent completion checkboxes for planned activities
 - Reusable activity templates with explicit updates
 - Local persistence through Android shared preferences
 - Short first-use onboarding and an in-app terminology guide

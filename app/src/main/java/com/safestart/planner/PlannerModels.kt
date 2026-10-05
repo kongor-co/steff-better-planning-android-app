@@ -31,7 +31,8 @@ data class PlannedActivity(
     val demandingness: Demandingness,
     val pauseMinutes: Int,
     val windowEndAnchorId: String,
-    val templateId: String? = null
+    val templateId: String? = null,
+    val completed: Boolean = false
 )
 
 data class ReusableActivity(

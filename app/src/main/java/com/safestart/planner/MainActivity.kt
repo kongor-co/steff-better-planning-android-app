@@ -2,6 +2,7 @@ package com.safestart.planner
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -37,7 +38,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -49,6 +50,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.time.LocalTime
@@ -84,6 +86,7 @@ private fun SafeStartApp() {
     val store = remember { PlanStore(context) }
     var plan by remember { mutableStateOf(store.load()) }
     var screen by remember { mutableStateOf<Screen>(Screen.Plan) }
+    var screenHistory by remember { mutableStateOf<List<Screen>>(emptyList()) }
     var showOnboarding by remember { mutableStateOf(!plan.onboardingSeen) }
 
     fun commit(updated: Plan) {
@@ -91,8 +94,25 @@ private fun SafeStartApp() {
         store.save(updated)
     }
 
+    fun navigate(destination: Screen) {
+        screenHistory = screenHistory + screen
+        screen = destination
+    }
+
+    fun goBack() {
+        screen = screenHistory.lastOrNull() ?: Screen.Plan
+        screenHistory = screenHistory.dropLast(1)
+    }
+
+    fun showPlan() {
+        screen = Screen.Plan
+        screenHistory = emptyList()
+    }
+
+    BackHandler(enabled = screen != Screen.Plan) { goBack() }
+
     MaterialTheme(
-        colorScheme = darkColorScheme(
+        colorScheme = lightColorScheme(
             primary = Moss,
             onPrimary = Color.White,
             secondary = Clay,
@@ -106,36 +126,60 @@ private fun SafeStartApp() {
             when (val destination = screen) {
                 Screen.Plan -> PlanScreen(
                     plan = plan,
-                    onStart = { screen = Screen.Start },
-                    onAddActivity = { screen = Screen.Activity() },
-                    onEditActivity = { screen = Screen.Activity(activityId = it) },
-                    onAddAnchor = { screen = Screen.Anchor() },
-                    onEditAnchor = { screen = Screen.Anchor(it) },
-                    onLibrary = { screen = Screen.Library },
-                    onHelp = { screen = Screen.Help },
-                    onReorder = { firstId, secondId ->
-                        val mutable = plan.activities.toMutableList()
-                        val first = mutable.indexOfFirst { it.id == firstId }
-                        val second = mutable.indexOfFirst { it.id == secondId }
-                        if (first >= 0) {
-                            if (second >= 0) {
-                                val held = mutable[first]
-                                mutable[first] = mutable[second]
-                                mutable[second] = held
-                                commit(plan.copy(activities = mutable))
+                    onStart = { navigate(Screen.Start) },
+                    onAddActivity = { navigate(Screen.Activity()) },
+                    onEditActivity = { navigate(Screen.Activity(activityId = it)) },
+                    onAddAnchor = { navigate(Screen.Anchor()) },
+                    onEditAnchor = { navigate(Screen.Anchor(it)) },
+                    onLibrary = { navigate(Screen.Library) },
+                    onHelp = { navigate(Screen.Help) },
+                    onToggleComplete = { activityId ->
+                        commit(plan.copy(activities = plan.activities.map {
+                            if (it.id == activityId) it.copy(completed = !it.completed) else it
+                        }))
+                    },
+                    onMove = { activityId, direction ->
+                        val windows = PlannerEngine.windows(plan)
+                        val windowIndex = windows.indexOfFirst { window -> window.activities.any { it.id == activityId } }
+                        if (windowIndex < 0) {
+                            "Activity could not be found."
+                        } else {
+                            val groups = windows.map { it.activities.toMutableList() }.toMutableList()
+                            val itemIndex = groups[windowIndex].indexOfFirst { it.id == activityId }
+                            val activity = groups[windowIndex].removeAt(itemIndex)
+                            if (direction < 0) {
+                                if (itemIndex > 0) {
+                                    groups[windowIndex].add(itemIndex - 1, activity)
+                                } else if (windowIndex > 0) {
+                                    groups[windowIndex - 1].add(activity.copy(windowEndAnchorId = windows[windowIndex - 1].endAnchor.id))
+                                } else {
+                                    groups[windowIndex].add(0, activity)
+                                }
+                            } else {
+                                if (itemIndex < groups[windowIndex].size) {
+                                    groups[windowIndex].add(itemIndex + 1, activity)
+                                } else if (windowIndex < windows.lastIndex) {
+                                    groups[windowIndex + 1].add(0, activity.copy(windowEndAnchorId = windows[windowIndex + 1].endAnchor.id))
+                                } else {
+                                    groups[windowIndex].add(activity)
+                                }
                             }
+                            val candidate = plan.copy(activities = groups.flatten())
+                            val error = PlannerEngine.validate(candidate)
+                            if (error == null) commit(candidate)
+                            error
                         }
                     }
                 )
                 Screen.Start -> StartEditor(
                     initial = plan.startMinute,
-                    onBack = { screen = Screen.Plan },
+                    onBack = ::goBack,
                     onSave = { minute ->
                         val candidate = plan.copy(startMinute = minute)
                         val error = if (candidate.anchors.isEmpty()) null else PlannerEngine.validate(candidate)
                         if (error == null) {
                             commit(candidate)
-                            screen = Screen.Plan
+                            showPlan()
                         }
                         error
                     }
@@ -144,20 +188,20 @@ private fun SafeStartApp() {
                     plan = plan,
                     activityId = destination.activityId,
                     templateId = destination.templateId,
-                    onBack = { screen = Screen.Plan },
+                    onBack = ::goBack,
                     onCommit = { updated -> commit(updated) },
-                    onDone = { screen = Screen.Plan },
-                    onEditOther = { screen = Screen.Activity(activityId = it) }
+                    onDone = ::showPlan,
+                    onEditOther = { navigate(Screen.Activity(activityId = it)) }
                 )
                 is Screen.Anchor -> AnchorEditor(
                     plan = plan,
                     anchorId = destination.anchorId,
-                    onBack = { screen = Screen.Plan },
+                    onBack = ::goBack,
                     onSave = { candidate ->
                         val error = PlannerEngine.validate(candidate)
                         if (error == null) {
                             commit(candidate)
-                            screen = Screen.Plan
+                            showPlan()
                         }
                         error
                     },
@@ -166,18 +210,18 @@ private fun SafeStartApp() {
                             anchors = plan.anchors.filterNot { it.id == anchorId },
                             activities = plan.activities.filterNot { it.windowEndAnchorId == anchorId }
                         ))
-                        screen = Screen.Plan
+                        showPlan()
                     }
                 )
                 Screen.Library -> LibraryScreen(
                     plan = plan,
-                    onBack = { screen = Screen.Plan },
-                    onInsert = { screen = Screen.Activity(templateId = it) },
+                    onBack = ::goBack,
+                    onInsert = { navigate(Screen.Activity(templateId = it)) },
                     onDelete = { id ->
                         commit(plan.copy(reusableActivities = plan.reusableActivities.filterNot { it.id == id }))
                     }
                 )
-                Screen.Help -> HelpScreen(onBack = { screen = Screen.Plan })
+                Screen.Help -> HelpScreen(onBack = ::goBack)
             }
         }
 
@@ -215,8 +259,10 @@ private fun PlanScreen(
     onEditAnchor: (String) -> Unit,
     onLibrary: () -> Unit,
     onHelp: () -> Unit,
-    onReorder: (String, String) -> Unit
+    onToggleComplete: (String) -> Unit,
+    onMove: (String, Int) -> String?
 ) {
+    var moveError by remember { mutableStateOf<String?>(null) }
     Column(Modifier.fillMaxSize()) {
         AppHeader("Safe Start", action = onHelp, actionLabel = "How it works")
         if (plan.anchors.isEmpty()) {
@@ -245,8 +291,14 @@ private fun PlanScreen(
                     trackColor = Sage
                 )
             }
-            items(PlannerEngine.windows(plan), key = { it.endAnchor.id }) { window ->
-                WindowCard(window, onEditActivity, onEditAnchor, onReorder)
+            item {
+                TimelineCard(
+                    plan = plan,
+                    onEditActivity = onEditActivity,
+                    onEditAnchor = onEditAnchor,
+                    onToggleComplete = onToggleComplete,
+                    onMove = { activityId, direction -> moveError = onMove(activityId, direction) }
+                )
             }
         }
         Surface(color = Paper, tonalElevation = 6.dp) {
@@ -254,11 +306,19 @@ private fun PlanScreen(
                 modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                OutlinedButton(onClick = onLibrary, modifier = Modifier.weight(1f)) { Text("Reusable") }
+                OutlinedButton(onClick = onLibrary, modifier = Modifier.weight(1f)) { Text("Reusable activity") }
                 OutlinedButton(onClick = onAddAnchor, modifier = Modifier.weight(1f)) { Text("Add Anchor") }
                 Button(onClick = onAddActivity, modifier = Modifier.weight(1f)) { Text("Add activity") }
             }
         }
+    }
+    moveError?.let { message ->
+        AlertDialog(
+            onDismissRequest = { moveError = null },
+            title = { Text("That move does not fit") },
+            text = { Text(message) },
+            confirmButton = { Button(onClick = { moveError = null }) { Text("OK") } }
+        )
     }
 }
 
@@ -289,81 +349,120 @@ private fun EmptyPlan(onStart: () -> Unit, onAddAnchor: () -> Unit) {
 }
 
 @Composable
-private fun WindowCard(
-    window: PlanningWindow,
+private fun TimelineCard(
+    plan: Plan,
     onEditActivity: (String) -> Unit,
     onEditAnchor: (String) -> Unit,
-    onReorder: (String, String) -> Unit
+    onToggleComplete: (String) -> Unit,
+    onMove: (String, Int) -> Unit
 ) {
-    val planned = PlannerEngine.plannedMinutes(window)
-    val available = PlannerEngine.availableMinutes(window)
-    val capacity = PlannerEngine.capacityPercent(window)
-    val schedule = PlannerEngine.schedule(window)
+    val windows = PlannerEngine.windows(plan)
+    val finalAnchor = windows.last().endAnchor
     Card(colors = CardDefaults.cardColors(containerColor = Paper), shape = RoundedCornerShape(22.dp)) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(
-                "${PlannerEngine.formatTime(window.startMinute)} to ${PlannerEngine.formatTime(window.endAnchor.startMinute)}",
-                fontSize = 13.sp,
-                color = Muted,
+                "TIMELINE",
+                color = Moss,
+                fontSize = 12.sp,
                 fontWeight = FontWeight.Bold
             )
-            Row(verticalAlignment = Alignment.Bottom) {
-                Column(Modifier.weight(1f)) {
-                    Text("LATEST SAFE START", color = Moss, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    Text(PlannerEngine.formatTime(PlannerEngine.latestSafeStart(window)), fontSize = 32.sp, fontWeight = FontWeight.Bold)
-                }
-                Text("$capacity% planned", color = capacityColor(capacity), fontWeight = FontWeight.Bold)
-            }
-            LinearProgressIndicator(
-                progress = { capacity.coerceAtMost(100) / 100f },
-                modifier = Modifier.fillMaxWidth().height(8.dp),
-                color = capacityColor(capacity),
-                trackColor = Sage
+            Text(
+                "${PlannerEngine.formatTime(plan.startMinute)} to ${PlannerEngine.formatTime(finalAnchor.startMinute)}",
+                fontSize = 25.sp,
+                fontWeight = FontWeight.Bold
             )
-            if (capacity >= 80) {
-                Surface(color = if (capacity == 100) Clay.copy(alpha = 0.13f) else Amber.copy(alpha = 0.24f), shape = RoundedCornerShape(12.dp)) {
-                    Text(
-                        if (capacity == 100) "This planning window is full." else "Your plan is getting full. Keep the remaining time free for unexpected events.",
-                        modifier = Modifier.padding(12.dp),
-                        fontWeight = FontWeight.SemiBold,
-                        color = Ink
+            windows.forEachIndexed { windowIndex, window ->
+                val planned = PlannerEngine.plannedMinutes(window)
+                val available = PlannerEngine.availableMinutes(window)
+                val capacity = PlannerEngine.capacityPercent(window)
+                val schedule = PlannerEngine.schedule(window)
+                Surface(color = Sage.copy(alpha = 0.45f), shape = RoundedCornerShape(12.dp)) {
+                    Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Text("BEFORE ${window.endAnchor.title.uppercase()}", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Latest safe start", color = Muted, fontSize = 12.sp)
+                                Text(PlannerEngine.formatTime(PlannerEngine.latestSafeStart(window)), fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                            }
+                            Text("$capacity% planned", color = capacityColor(capacity), fontWeight = FontWeight.Bold)
+                        }
+                        LinearProgressIndicator(
+                            progress = { capacity.coerceAtMost(100) / 100f },
+                            modifier = Modifier.fillMaxWidth().height(6.dp),
+                            color = capacityColor(capacity),
+                            trackColor = Paper
+                        )
+                        Text(
+                            "${PlannerEngine.formatDuration(planned)} reserved of ${PlannerEngine.formatDuration(available)}",
+                            color = Muted,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+                if (capacity >= 80) {
+                    Surface(color = if (capacity == 100) Clay.copy(alpha = 0.13f) else Amber.copy(alpha = 0.24f), shape = RoundedCornerShape(12.dp)) {
+                        Text(
+                            if (capacity == 100) "The time before this Anchor is full." else "The time before this Anchor is getting full.",
+                            modifier = Modifier.fillMaxWidth().padding(10.dp),
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+                val freeEnd = PlannerEngine.latestSafeStart(window)
+                if (freeEnd > window.startMinute) {
+                    Surface(color = Cream, shape = RoundedCornerShape(12.dp)) {
+                        Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Free", fontWeight = FontWeight.SemiBold)
+                            Text("${PlannerEngine.formatTime(window.startMinute)} to ${PlannerEngine.formatTime(freeEnd)}", color = Muted)
+                        }
+                    }
+                }
+                schedule.forEachIndexed { activityIndex, item ->
+                    ActivityRow(
+                        item = item,
+                        canMoveUp = activityIndex > 0 || windowIndex > 0,
+                        canMoveDown = activityIndex < schedule.lastIndex || windowIndex < windows.lastIndex,
+                        onEdit = { onEditActivity(item.activity.id) },
+                        onToggleComplete = { onToggleComplete(item.activity.id) },
+                        onMoveUp = { onMove(item.activity.id, -1) },
+                        onMoveDown = { onMove(item.activity.id, 1) }
                     )
                 }
-            }
-            Text(
-                "${PlannerEngine.formatDuration(planned)} reserved of ${PlannerEngine.formatDuration(available)}",
-                color = Muted
-            )
-            val freeEnd = PlannerEngine.latestSafeStart(window)
-            if (freeEnd > window.startMinute) {
-                Surface(color = Sage.copy(alpha = 0.65f), shape = RoundedCornerShape(12.dp)) {
-                    Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Free", fontWeight = FontWeight.SemiBold)
-                        Text("${PlannerEngine.formatTime(window.startMinute)} to ${PlannerEngine.formatTime(freeEnd)}", color = Muted)
+                Surface(
+                    onClick = { onEditAnchor(window.endAnchor.id) },
+                    color = Ink,
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("FIXED ANCHOR", color = Sage, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text(window.endAnchor.title, color = Color.White, fontWeight = FontWeight.Bold)
+                            window.endAnchor.durationMinutes?.let { duration ->
+                                Text(PlannerEngine.formatDuration(duration), color = Sage, fontSize = 12.sp)
+                            }
+                        }
+                        val anchorEnd = window.endAnchor.durationMinutes?.let { window.endAnchor.startMinute + it }
+                        Text(
+                            if (anchorEnd == null) {
+                                PlannerEngine.formatTime(window.endAnchor.startMinute)
+                            } else {
+                                "${PlannerEngine.formatTime(window.endAnchor.startMinute)} to ${PlannerEngine.formatTime(anchorEnd)}"
+                            },
+                            color = Color.White,
+                            fontSize = if (anchorEnd == null) 20.sp else 15.sp,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
-            }
-            schedule.forEachIndexed { index, item ->
-                ActivityRow(
-                    item = item,
-                    canMoveUp = index > 0,
-                    canMoveDown = index < schedule.lastIndex,
-                    onEdit = { onEditActivity(item.activity.id) },
-                    onMoveUp = { onReorder(item.activity.id, schedule[index - 1].activity.id) },
-                    onMoveDown = { onReorder(item.activity.id, schedule[index + 1].activity.id) }
-                )
-            }
-            Surface(
-                onClick = { onEditAnchor(window.endAnchor.id) },
-                color = Ink,
-                shape = RoundedCornerShape(14.dp)
-            ) {
-                Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("ANCHOR", color = Sage, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        Text(window.endAnchor.title, color = Color.White, fontWeight = FontWeight.Bold)
-                    }
-                    Text(PlannerEngine.formatTime(window.endAnchor.startMinute), color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                if (windowIndex < windows.lastIndex) {
+                    Text(
+                        "Continue after ${PlannerEngine.formatTime(window.endAnchor.startMinute + (window.endAnchor.durationMinutes ?: 0))}",
+                        color = Muted,
+                        fontSize = 12.sp,
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Center
+                    )
                 }
             }
         }
@@ -376,16 +475,27 @@ private fun ActivityRow(
     canMoveUp: Boolean,
     canMoveDown: Boolean,
     onEdit: () -> Unit,
+    onToggleComplete: () -> Unit,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit
 ) {
     Surface(onClick = onEdit, color = Cream, shape = RoundedCornerShape(14.dp)) {
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(
+                checked = item.activity.completed,
+                onCheckedChange = { onToggleComplete() },
+                modifier = Modifier.size(36.dp)
+            )
+            Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
                 if (item.activity.kind == ActivityKind.OPTIONAL) {
                     Text("OPTIONAL", color = Clay, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 }
-                Text(item.activity.title, fontWeight = FontWeight.Bold)
+                Text(
+                    item.activity.title,
+                    fontWeight = FontWeight.Bold,
+                    textDecoration = if (item.activity.completed) TextDecoration.LineThrough else TextDecoration.None
+                )
                 Text(
                     "${PlannerEngine.formatTime(item.startMinute)} to ${PlannerEngine.formatTime(item.endMinute)}  ·  ${PlannerEngine.formatDuration(PlannerEngine.reservedMinutes(item.activity))}",
                     color = Muted,
@@ -409,7 +519,8 @@ private fun StartEditor(initial: Int, onBack: () -> Unit, onSave: (Int) -> Strin
         Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Text("This is the earliest time you can begin planned activities.", color = Muted, textAlign = TextAlign.Center)
             Spacer(Modifier.height(32.dp))
-            TimeStepper(minute = minute, onChange = { minute = it })
+            ManualTimePicker(minute = minute, onChange = { minute = it })
+            Text("Tap the hour or minute to change it.", color = Muted, fontSize = 13.sp)
             Spacer(Modifier.height(16.dp))
             OutlinedButton(onClick = {
                 val now = LocalTime.now()
@@ -422,6 +533,76 @@ private fun StartEditor(initial: Int, onBack: () -> Unit, onSave: (Int) -> Strin
                 modifier = Modifier.fillMaxWidth().navigationBarsPadding()
             ) { Text("Save available time") }
         }
+    }
+}
+
+private enum class ClockPart { HOUR, MINUTE }
+
+@Composable
+private fun ManualTimePicker(minute: Int, onChange: (Int) -> Unit) {
+    var selectedPart by remember { mutableStateOf<ClockPart?>(null) }
+    val hour = minute / 60
+    val minutePart = minute % 60
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Surface(
+            onClick = { selectedPart = ClockPart.HOUR },
+            color = Sage,
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Column(Modifier.padding(horizontal = 24.dp, vertical = 14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("HOUR", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Text("%02d".format(hour), fontSize = 42.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+        Text(":", fontSize = 38.sp, fontWeight = FontWeight.Bold)
+        Surface(
+            onClick = { selectedPart = ClockPart.MINUTE },
+            color = Sage,
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Column(Modifier.padding(horizontal = 24.dp, vertical = 14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("MINUTE", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Text("%02d".format(minutePart), fontSize = 42.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+
+    selectedPart?.let { part ->
+        val choices = if (part == ClockPart.HOUR) (0..23).toList() else (0..55 step 5).toList()
+        AlertDialog(
+            onDismissRequest = { selectedPart = null },
+            title = { Text(if (part == ClockPart.HOUR) "Choose hour" else "Choose minute") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    choices.chunked(4).forEach { rowChoices ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            rowChoices.forEach { choice ->
+                                val isSelected = if (part == ClockPart.HOUR) choice == hour else choice == minutePart
+                                if (isSelected) {
+                                    Button(
+                                        onClick = {
+                                            onChange(if (part == ClockPart.HOUR) choice * 60 + minutePart else hour * 60 + choice)
+                                            selectedPart = null
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    ) { Text("%02d".format(choice)) }
+                                } else {
+                                    OutlinedButton(
+                                        onClick = {
+                                            onChange(if (part == ClockPart.HOUR) choice * 60 + minutePart else hour * 60 + choice)
+                                            selectedPart = null
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    ) { Text("%02d".format(choice)) }
+                                }
+                            }
+                            repeat(4 - rowChoices.size) { Spacer(Modifier.weight(1f)) }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { selectedPart = null }) { Text("Close") } }
+        )
     }
 }
 
@@ -473,7 +654,8 @@ private fun ActivityEditor(
         demandingness = demandingness,
         pauseMinutes = pause,
         windowEndAnchorId = anchorId,
-        templateId = existing?.templateId ?: template?.id
+        templateId = existing?.templateId ?: template?.id,
+        completed = existing?.completed ?: false
     )
 
     fun saveActivity() {
@@ -582,10 +764,11 @@ private fun ActivityEditor(
             }
             if (plan.anchors.size > 1) {
                 item {
-                    SectionLabel("PLANNING WINDOW")
+                    SectionLabel("POSITION IN TIMELINE")
                     ScrollChoice(plan.anchors.sortedBy { it.startMinute }, plan.anchors.find { it.id == anchorId }, { anchorId = it.id }) {
                         "Before ${it.title}"
                     }
+                    Text("Choose which fixed Anchor this activity should appear before.", color = Muted, fontSize = 13.sp)
                 }
             }
             item {
