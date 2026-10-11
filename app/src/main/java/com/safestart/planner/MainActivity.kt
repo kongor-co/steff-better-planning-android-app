@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -50,6 +51,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -77,6 +79,7 @@ class MainActivity : ComponentActivity() {
 private sealed interface Screen {
     data object Plan : Screen
     data object Start : Screen
+    data object Schedule : Screen
     data class Activity(val activityId: String? = null, val templateId: String? = null) : Screen
     data class Anchor(val anchorId: String? = null) : Screen
     data object Library : Screen
@@ -136,6 +139,7 @@ private fun SafeStartApp() {
                     onEditAnchor = { navigate(Screen.Anchor(it)) },
                     onLibrary = { navigate(Screen.Library) },
                     onHelp = { navigate(Screen.Help) },
+                    onSchedule = { navigate(Screen.Schedule) },
                     onToggleComplete = { activityId ->
                         commit(plan.copy(activities = plan.activities.map {
                             if (it.id == activityId) it.copy(completed = !it.completed) else it
@@ -187,6 +191,7 @@ private fun SafeStartApp() {
                         error
                     }
                 )
+                Screen.Schedule -> ScheduleScreen(plan = plan, onBack = ::goBack)
                 is Screen.Activity -> ActivityEditor(
                     plan = plan,
                     activityId = destination.activityId,
@@ -262,6 +267,7 @@ private fun PlanScreen(
     onEditAnchor: (String) -> Unit,
     onLibrary: () -> Unit,
     onHelp: () -> Unit,
+    onSchedule: () -> Unit,
     onToggleComplete: (String) -> Unit,
     onMove: (String, Int) -> String?
 ) {
@@ -283,16 +289,31 @@ private fun PlanScreen(
                         Text("AVAILABLE FROM", color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         Text(PlannerEngine.formatTime(plan.startMinute), fontSize = 34.sp, fontWeight = FontWeight.Bold)
                     }
-                    OutlinedButton(onClick = onStart) { Text("Change") }
+                    OutlinedButton(
+                        onClick = onStart,
+                        modifier = Modifier.width(112.dp)
+                    ) { Text("Change") }
                 }
                 val overall = PlannerEngine.overallCapacity(plan)
-                Text("$overall% planned overall", color = Muted)
-                LinearProgressIndicator(
-                    progress = { (overall.coerceAtMost(100)) / 100f },
-                    modifier = Modifier.fillMaxWidth().height(6.dp),
-                    color = capacityColor(overall),
-                    trackColor = Sage
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("$overall% planned overall", color = Muted)
+                        LinearProgressIndicator(
+                            progress = { (overall.coerceAtMost(100)) / 100f },
+                            modifier = Modifier.fillMaxWidth().height(6.dp),
+                            color = capacityColor(overall),
+                            trackColor = Sage
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = onSchedule,
+                        modifier = Modifier.width(112.dp)
+                    ) { Text("Schedule") }
+                }
             }
             item {
                 TimelineCard(
@@ -309,9 +330,18 @@ private fun PlanScreen(
                 modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                OutlinedButton(onClick = onLibrary, modifier = Modifier.weight(1f)) { Text("Reusable activity") }
-                OutlinedButton(onClick = onAddAnchor, modifier = Modifier.weight(1f)) { Text("Add Anchor") }
-                Button(onClick = onAddActivity, modifier = Modifier.weight(1f)) { Text("Add activity") }
+                OutlinedButton(
+                    onClick = onLibrary,
+                    modifier = Modifier.weight(1f).height(48.dp)
+                ) { Text("Reusable activity", maxLines = 1) }
+                OutlinedButton(
+                    onClick = onAddAnchor,
+                    modifier = Modifier.weight(1f).height(48.dp)
+                ) { Text("Add Anchor", maxLines = 1) }
+                Button(
+                    onClick = onAddActivity,
+                    modifier = Modifier.weight(1f).height(48.dp)
+                ) { Text("Add activity", maxLines = 1) }
             }
         }
     }
@@ -322,6 +352,203 @@ private fun PlanScreen(
             text = { Text(message) },
             confirmButton = { Button(onClick = { moveError = null }) { Text("OK") } }
         )
+    }
+}
+
+private const val ScheduleMinuteHeight = 3
+
+@Composable
+private fun ScheduleScreen(plan: Plan, onBack: () -> Unit) {
+    val windows = PlannerEngine.windows(plan)
+    if (windows.isEmpty()) {
+        Column(Modifier.fillMaxSize()) {
+            AppHeader("Schedule", onBack)
+            Text("Add an Anchor to create a schedule.", modifier = Modifier.padding(20.dp), color = Muted)
+        }
+        return
+    }
+    val endMinute = windows.last().endAnchor.startMinute
+    val totalMinutes = endMinute - plan.startMinute
+    val overall = PlannerEngine.overallCapacity(plan)
+    Column(Modifier.fillMaxSize()) {
+        AppHeader("Schedule", onBack)
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 12.dp, end = 12.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            item {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "${PlannerEngine.formatTime(plan.startMinute)} to ${PlannerEngine.formatTime(endMinute)}",
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(PlannerEngine.formatDuration(totalMinutes), color = Muted, fontSize = 13.sp)
+                    }
+                    Text("$overall% planned", color = capacityColor(overall), fontWeight = FontWeight.Bold)
+                }
+            }
+            item {
+                LinearProgressIndicator(
+                    progress = { overall.coerceAtMost(100) / 100f },
+                    modifier = Modifier.fillMaxWidth().height(5.dp),
+                    color = capacityColor(overall),
+                    trackColor = Sage
+                )
+            }
+            item {
+                ProportionalSchedule(
+                    startMinute = plan.startMinute,
+                    endMinute = endMinute,
+                    entries = PlannerEngine.timelineEntries(plan)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProportionalSchedule(startMinute: Int, endMinute: Int, entries: List<TimelineEntry>) {
+    val totalMinutes = (endMinute - startMinute).coerceAtLeast(1)
+    val plotHeight = (totalMinutes * ScheduleMinuteHeight).dp
+    val fullHeight = plotHeight + 44.dp
+    val markers = remember(startMinute, endMinute) {
+        buildList {
+            add(startMinute)
+            var marker = ((startMinute + 29) / 30) * 30
+            while (marker < endMinute) {
+                if (marker > startMinute) add(marker)
+                marker += 30
+            }
+            add(endMinute)
+        }.distinct()
+    }
+    Box(Modifier.fillMaxWidth().height(fullHeight)) {
+        Box(
+            Modifier
+                .offset(x = 58.dp)
+                .width(1.dp)
+                .height(plotHeight)
+                .background(Ink.copy(alpha = 0.18f))
+        )
+        markers.forEach { marker ->
+            val top = ((marker - startMinute) * ScheduleMinuteHeight).dp
+            val isHour = marker % 60 == 0
+            val labelTop = when (marker) {
+                startMinute -> 0.dp
+                endMinute -> top - 17.dp
+                else -> top - 8.dp
+            }
+            Text(
+                PlannerEngine.formatTime(marker),
+                modifier = Modifier.offset(y = labelTop).width(52.dp),
+                color = Muted,
+                fontSize = if (isHour) 11.sp else 10.sp,
+                fontWeight = if (isHour) FontWeight.SemiBold else FontWeight.Normal,
+                textAlign = TextAlign.End
+            )
+            Box(
+                Modifier
+                    .padding(start = 62.dp)
+                    .offset(y = top)
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(Ink.copy(alpha = if (isHour) 0.14f else 0.07f))
+            )
+        }
+        entries.filter { it.endMinute > it.startMinute }.forEach { entry ->
+            ScheduleTimelineBlock(entry = entry, scheduleStartMinute = startMinute)
+        }
+        entries.lastOrNull {
+            (it.kind == TimelineEntryKind.ANCHOR).and(it.endMinute == it.startMinute)
+        }?.let { finalAnchor ->
+            val top = ((finalAnchor.startMinute - startMinute) * ScheduleMinuteHeight).dp
+            Box(
+                Modifier
+                    .padding(start = 62.dp)
+                    .offset(y = top - 2.dp)
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .background(Clay)
+            )
+            Text(
+                finalAnchor.title,
+                modifier = Modifier.padding(start = 70.dp).offset(y = top + 6.dp),
+                color = Clay,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+@Composable
+private fun ScheduleTimelineBlock(entry: TimelineEntry, scheduleStartMinute: Int) {
+    val duration = entry.endMinute - entry.startMinute
+    val heightValue = (duration * ScheduleMinuteHeight).dp
+    val top = ((entry.startMinute - scheduleStartMinute) * ScheduleMinuteHeight).dp
+    val activityInset = if (entry.kind == TimelineEntryKind.ACTIVITY) 1.dp else 0.dp
+    val visibleHeight = (heightValue - activityInset * 2).coerceAtLeast(1.dp)
+    val containerColor = when (entry.kind) {
+        TimelineEntryKind.FREE -> Sage.copy(alpha = 0.42f)
+        TimelineEntryKind.ACTIVITY -> if (entry.optional) Amber.copy(alpha = 0.38f) else Sage
+        TimelineEntryKind.ANCHOR -> Ink
+    }
+    val contentColor = when (entry.kind) {
+        TimelineEntryKind.ANCHOR -> Color.White
+        TimelineEntryKind.FREE -> Muted
+        TimelineEntryKind.ACTIVITY -> Ink
+    }
+    Surface(
+        color = containerColor,
+        contentColor = contentColor,
+        shape = RoundedCornerShape(7.dp),
+        modifier = Modifier
+            .padding(start = 64.dp, end = 2.dp)
+            .offset(y = top + activityInset)
+            .fillMaxWidth()
+            .height(visibleHeight)
+            .alpha(if (entry.completed) 0.48f else 1f)
+    ) {
+        if (visibleHeight >= 18.dp) {
+            Row(
+                modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = if (visibleHeight >= 36.dp) 5.dp else 1.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        when (entry.kind) {
+                            TimelineEntryKind.ANCHOR -> entry.title
+                            TimelineEntryKind.ACTIVITY -> if (entry.optional) "${entry.title} · Optional" else entry.title
+                            TimelineEntryKind.FREE -> "Free"
+                        },
+                        fontSize = if (visibleHeight >= 30.dp) 13.sp else 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        textDecoration = if (entry.completed) TextDecoration.LineThrough else TextDecoration.None
+                    )
+                    if (visibleHeight >= 48.dp) {
+                        Text(
+                            "${PlannerEngine.formatTime(entry.startMinute)} to ${PlannerEngine.formatTime(entry.endMinute)}",
+                            color = if (entry.kind == TimelineEntryKind.ANCHOR) Sage else Muted,
+                            fontSize = 11.sp,
+                            maxLines = 1
+                        )
+                    }
+                }
+                if (visibleHeight >= 28.dp) {
+                    Text(
+                        PlannerEngine.formatDuration(duration),
+                        color = if (entry.kind == TimelineEntryKind.ANCHOR) Sage else Muted,
+                        fontSize = 11.sp,
+                        maxLines = 1
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -363,12 +590,6 @@ private fun TimelineCard(
     val finalAnchor = windows.last().endAnchor
     Card(colors = CardDefaults.cardColors(containerColor = Paper), shape = RoundedCornerShape(22.dp)) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(
-                "TIMELINE",
-                color = Moss,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold
-            )
             Text(
                 "${PlannerEngine.formatTime(plan.startMinute)} to ${PlannerEngine.formatTime(finalAnchor.startMinute)}",
                 fontSize = 25.sp,

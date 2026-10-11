@@ -60,6 +60,40 @@ class PlannerEngineTest {
         assertEquals(100, PlannerEngine.capacityPercent(PlannerEngine.windows(plan).first()))
     }
 
+    @Test
+    fun timelineIncludesFreeTimeActivitiesAndIntermediateAnchors() {
+        val lunch = Anchor(id = "lunch", title = "Lunch", startMinute = 12 * 60, durationMinutes = 60)
+        val appointment = Anchor(id = "appointment", title = "Appointment", startMinute = 15 * 60)
+        val first = PlannedActivity(
+            id = "first",
+            title = "Work",
+            kind = ActivityKind.TASK,
+            durationMinutes = 60,
+            complexity = Complexity.LOW,
+            bufferPercent = 20,
+            demandingness = Demandingness.LIGHT,
+            pauseMinutes = 5,
+            windowEndAnchorId = lunch.id,
+            completed = true
+        )
+        val second = first.copy(
+            id = "second",
+            title = "Travel",
+            durationMinutes = 30,
+            windowEndAnchorId = appointment.id,
+            completed = false
+        )
+        val entries = PlannerEngine.timelineEntries(
+            Plan(startMinute = 9 * 60, anchors = listOf(lunch, appointment), activities = listOf(first, second))
+        )
+
+        assertEquals(TimelineEntryKind.FREE, entries.first().kind)
+        assertEquals(true, entries.first { it.id == first.id }.completed)
+        assertEquals(13 * 60, entries.first { it.id == lunch.id }.endMinute)
+        assertEquals(appointment.startMinute, entries.last().endMinute)
+        assertEquals(TimelineEntryKind.ANCHOR, entries.last().kind)
+    }
+
     private fun activity(
         id: String = "activity",
         duration: Int,
