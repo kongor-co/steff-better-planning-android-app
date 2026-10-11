@@ -94,6 +94,53 @@ object PlannerEngine {
         return windows.sumOf(::plannedMinutes) * 100 / available
     }
 
+    fun timelineEntries(plan: Plan): List<TimelineEntry> {
+        val windows = windows(plan)
+        return buildList {
+            windows.forEachIndexed { index, window ->
+                val freeEnd = latestSafeStart(window)
+                if (freeEnd > window.startMinute) {
+                    add(
+                        TimelineEntry(
+                            id = "free-${window.endAnchor.id}",
+                            title = "Free",
+                            startMinute = window.startMinute,
+                            endMinute = freeEnd,
+                            kind = TimelineEntryKind.FREE
+                        )
+                    )
+                }
+                schedule(window).forEach { scheduled ->
+                    add(
+                        TimelineEntry(
+                            id = scheduled.activity.id,
+                            title = scheduled.activity.title,
+                            startMinute = scheduled.startMinute,
+                            endMinute = scheduled.endMinute,
+                            kind = TimelineEntryKind.ACTIVITY,
+                            completed = scheduled.activity.completed,
+                            optional = scheduled.activity.kind == ActivityKind.OPTIONAL
+                        )
+                    )
+                }
+                val anchorEnd = if (index < windows.lastIndex) {
+                    window.endAnchor.startMinute + (window.endAnchor.durationMinutes ?: 0)
+                } else {
+                    window.endAnchor.startMinute
+                }
+                add(
+                    TimelineEntry(
+                        id = window.endAnchor.id,
+                        title = window.endAnchor.title,
+                        startMinute = window.endAnchor.startMinute,
+                        endMinute = anchorEnd,
+                        kind = TimelineEntryKind.ANCHOR
+                    )
+                )
+            }
+        }
+    }
+
     fun formatTime(totalMinutes: Int): String {
         val normalized = ((totalMinutes % 1440) + 1440) % 1440
         return "%02d:%02d".format(normalized / 60, normalized % 60)

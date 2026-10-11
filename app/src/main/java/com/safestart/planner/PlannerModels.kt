@@ -74,3 +74,15 @@ data class CapacityConflict(
     val proposedTitle: String,
     val proposedActivityId: String
 )
+
+enum class TimelineEntryKind { FREE, ACTIVITY, ANCHOR }
+
+data class TimelineEntry(
+    val id: String,
+    val title: String,
+    val startMinute: Int,
+    val endMinute: Int,
+    val kind: TimelineEntryKind,
+    val completed: Boolean = false,
+    val optional: Boolean = false
+)
