@@ -1,6 +1,7 @@
 package com.safestart.planner
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -92,6 +93,51 @@ class PlannerEngineTest {
         assertEquals(13 * 60, entries.first { it.id == lunch.id }.endMinute)
         assertEquals(appointment.startMinute, entries.last().endMinute)
         assertEquals(TimelineEntryKind.ANCHOR, entries.last().kind)
+    }
+
+    @Test
+    fun savedPlanNamesIgnoreCapitalizationAndSurroundingSpaces() {
+        val saved = SavedPlan(
+            id = "saved",
+            name = "Morning plan",
+            plan = Plan(),
+            createdAtMillis = 1,
+            updatedAtMillis = 1
+        )
+
+        assertEquals(
+            "A plan with this name already exists.",
+            WorkspaceOperations.nameError("  MORNING PLAN  ", listOf(saved))
+        )
+        assertNull(WorkspaceOperations.nameError("Morning plan", listOf(saved), ignoredPlanId = saved.id))
+    }
+
+    @Test
+    fun duplicatePlanRegeneratesIdsAndPreservesCompletion() {
+        val originalAnchor = Anchor(id = "anchor-one", title = "Train", startMinute = 12 * 60)
+        val originalActivity = PlannedActivity(
+            id = "activity-one",
+            title = "Pack",
+            kind = ActivityKind.TASK,
+            durationMinutes = 30,
+            complexity = Complexity.LOW,
+            bufferPercent = 20,
+            demandingness = Demandingness.LIGHT,
+            pauseMinutes = 5,
+            windowEndAnchorId = originalAnchor.id,
+            templateId = "reusable-one",
+            completed = true
+        )
+
+        val duplicate = WorkspaceOperations.duplicatePlan(
+            Plan(anchors = listOf(originalAnchor), activities = listOf(originalActivity))
+        )
+
+        assertNotEquals(originalAnchor.id, duplicate.anchors.single().id)
+        assertNotEquals(originalActivity.id, duplicate.activities.single().id)
+        assertEquals(duplicate.anchors.single().id, duplicate.activities.single().windowEndAnchorId)
+        assertEquals(true, duplicate.activities.single().completed)
+        assertEquals(originalActivity.templateId, duplicate.activities.single().templateId)
     }
 
     private fun activity(
