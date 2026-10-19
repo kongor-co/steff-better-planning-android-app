@@ -16,7 +16,11 @@ Safe Start is an offline Android planner for people who underestimate time. It s
 - Manual activity ordering and movement across Anchors
 - Persistent completion checkboxes for planned activities
 - Reusable activity templates with explicit updates
-- Local persistence through Android shared preferences
+- Named saved plans with explicit Save actions
+- Plans home screen with rename, duplicate, and delete actions
+- Recoverable unsaved drafts with guarded navigation
+- Global reusable activities shared across every plan
+- Versioned local persistence with checksums, backup recovery, and legacy migration
 - Short first-use onboarding and an in-app terminology guide
 
 ## Build

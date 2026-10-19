@@ -77,6 +77,7 @@ class MainActivity : ComponentActivity() {
 }
 
 private sealed interface Screen {
+    data object Plans : Screen
     data object Plan : Screen
     data object Start : Screen
     data object Schedule : Screen
@@ -86,18 +87,58 @@ private sealed interface Screen {
     data object Help : Screen
 }
 
+private sealed interface PendingPlanAction {
+    data object ShowPlans : PendingPlanAction
+    data object NewPlan : PendingPlanAction
+    data class OpenPlan(val planId: String) : PendingPlanAction
+}
+
+private sealed interface NameDialogRequest {
+    data class SaveDraft(val afterSave: PendingPlanAction? = null) : NameDialogRequest
+    data class Rename(val planId: String, val initialName: String) : NameDialogRequest
+    data class Duplicate(val planId: String, val initialName: String) : NameDialogRequest
+}
+
 @Composable
 private fun SafeStartApp() {
     val context = LocalContext.current
     val store = remember { PlanStore(context) }
-    var plan by remember { mutableStateOf(store.load()) }
-    var screen by remember { mutableStateOf<Screen>(Screen.Plan) }
+    val loadResult = remember { store.load() }
+    var workspace by remember { mutableStateOf(loadResult.state) }
+    var screen by remember { mutableStateOf<Screen>(Screen.Plans) }
     var screenHistory by remember { mutableStateOf<List<Screen>>(emptyList()) }
-    var showOnboarding by remember { mutableStateOf(!plan.onboardingSeen) }
+    var showOnboarding by remember { mutableStateOf(!workspace.onboardingSeen) }
+    var notice by remember { mutableStateOf(loadResult.notice) }
+    var planStatus by remember { mutableStateOf<String?>(null) }
+    var pendingAction by remember { mutableStateOf<PendingPlanAction?>(null) }
+    var nameDialog by remember { mutableStateOf<NameDialogRequest?>(null) }
+    var deletePlanId by remember { mutableStateOf<String?>(null) }
 
-    fun commit(updated: Plan) {
-        plan = updated
-        store.save(updated)
+    val plan = workspace.draftPlan ?: Plan(
+        reusableActivities = workspace.reusableActivities,
+        onboardingSeen = workspace.onboardingSeen
+    )
+
+    fun persist(updated: WorkspaceState) {
+        workspace = updated
+        if (!store.save(updated)) {
+            notice = "The latest change could not be stored. Keep the app open and try again."
+        }
+    }
+
+    fun commit(updated: Plan, markPlanDirty: Boolean = true) {
+        planStatus = null
+        val draft = updated.copy(
+            reusableActivities = updated.reusableActivities,
+            onboardingSeen = workspace.onboardingSeen
+        )
+        persist(
+            workspace.copy(
+                reusableActivities = updated.reusableActivities,
+                draftPlan = draft,
+                draftDirty = if (markPlanDirty) true else workspace.draftDirty
+            )
+        )
     }
 
     fun navigate(destination: Screen) {
@@ -115,7 +156,130 @@ private fun SafeStartApp() {
         screenHistory = emptyList()
     }
 
-    BackHandler(enabled = screen != Screen.Plan) { goBack() }
+    fun clearedDraft(state: WorkspaceState = workspace): WorkspaceState = state.copy(
+        draftPlan = null,
+        draftSourcePlanId = null,
+        draftName = null,
+        draftDirty = false
+    )
+
+    fun performPlanAction(action: PendingPlanAction) {
+        planStatus = null
+        when (action) {
+            PendingPlanAction.ShowPlans -> {
+                persist(clearedDraft())
+                screen = Screen.Plans
+                screenHistory = emptyList()
+            }
+            PendingPlanAction.NewPlan -> {
+                val freshPlan = Plan(
+                    reusableActivities = workspace.reusableActivities,
+                    onboardingSeen = workspace.onboardingSeen
+                )
+                persist(
+                    clearedDraft().copy(
+                        draftPlan = freshPlan,
+                        draftDirty = false
+                    )
+                )
+                showPlan()
+            }
+            is PendingPlanAction.OpenPlan -> {
+                val saved = workspace.savedPlans.find { it.id == action.planId } ?: return
+                val editable = WorkspaceOperations.withWorkspaceData(
+                    saved.plan,
+                    workspace.reusableActivities,
+                    workspace.onboardingSeen
+                )
+                persist(
+                    clearedDraft().copy(
+                        draftPlan = editable,
+                        draftSourcePlanId = saved.id,
+                        draftName = saved.name,
+                        draftDirty = false
+                    )
+                )
+                showPlan()
+            }
+        }
+    }
+
+    fun requestPlanAction(action: PendingPlanAction) {
+        if (workspace.draftDirty) {
+            pendingAction = action
+        } else {
+            performPlanAction(action)
+        }
+    }
+
+    fun planSaveError(current: Plan): String? {
+        if (current.anchors.isEmpty()) return "Add at least one Anchor before saving this plan."
+        return PlannerEngine.validate(current)
+    }
+
+    fun saveExistingPlan(): String? {
+        val sourceId = workspace.draftSourcePlanId ?: return "This plan needs a name before it can be saved."
+        val current = workspace.draftPlan ?: return "There is no plan to save."
+        planSaveError(current)?.let { return it }
+        val now = System.currentTimeMillis()
+        val existing = workspace.savedPlans.find { it.id == sourceId }
+            ?: return "The original saved plan could not be found."
+        val updatedSaved = existing.copy(
+            plan = WorkspaceOperations.withoutWorkspaceData(current),
+            updatedAtMillis = now
+        )
+        persist(
+            workspace.copy(
+                savedPlans = workspace.savedPlans.map { if (it.id == sourceId) updatedSaved else it },
+                draftDirty = false
+            )
+        )
+        planStatus = "Plan saved."
+        return null
+    }
+
+    fun saveNewPlan(name: String): String? {
+        val current = workspace.draftPlan ?: return "There is no plan to save."
+        planSaveError(current)?.let { return it }
+        WorkspaceOperations.nameError(name, workspace.savedPlans)?.let { return it }
+        val trimmedName = name.trim()
+        val now = System.currentTimeMillis()
+        val saved = SavedPlan(
+            name = trimmedName,
+            plan = WorkspaceOperations.withoutWorkspaceData(current),
+            createdAtMillis = now,
+            updatedAtMillis = now
+        )
+        persist(
+            workspace.copy(
+                savedPlans = workspace.savedPlans + saved,
+                draftSourcePlanId = saved.id,
+                draftName = trimmedName,
+                draftDirty = false
+            )
+        )
+        planStatus = "Plan saved."
+        return null
+    }
+
+    fun requestSave() {
+        val error = planSaveError(plan)
+        if (error != null) {
+            notice = error
+        } else if (workspace.draftSourcePlanId == null) {
+            nameDialog = NameDialogRequest.SaveDraft()
+        } else {
+            saveExistingPlan()?.let { notice = it }
+        }
+    }
+
+    BackHandler(enabled = screen != Screen.Plans) {
+        if (screen == Screen.Plan) {
+            requestPlanAction(PendingPlanAction.ShowPlans)
+        } else {
+            goBack()
+        }
+    }
 
     MaterialTheme(
         colorScheme = lightColorScheme(
@@ -130,8 +294,25 @@ private fun SafeStartApp() {
     ) {
         Surface(modifier = Modifier.fillMaxSize(), color = Cream) {
             when (val destination = screen) {
+                Screen.Plans -> PlansScreen(
+                    workspace = workspace,
+                    onContinueDraft = ::showPlan,
+                    onNewPlan = { requestPlanAction(PendingPlanAction.NewPlan) },
+                    onOpenPlan = { requestPlanAction(PendingPlanAction.OpenPlan(it)) },
+                    onRenamePlan = { saved ->
+                        nameDialog = NameDialogRequest.Rename(saved.id, saved.name)
+                    },
+                    onDuplicatePlan = { saved ->
+                        nameDialog = NameDialogRequest.Duplicate(saved.id, "Copy of ${saved.name}")
+                    },
+                    onDeletePlan = { deletePlanId = it },
+                    onHelp = { navigate(Screen.Help) }
+                )
                 Screen.Plan -> PlanScreen(
                     plan = plan,
+                    planName = workspace.draftName,
+                    isDirty = workspace.draftDirty,
+                    statusMessage = planStatus,
                     onStart = { navigate(Screen.Start) },
                     onAddActivity = { navigate(Screen.Activity()) },
                     onEditActivity = { navigate(Screen.Activity(activityId = it)) },
@@ -139,6 +320,8 @@ private fun SafeStartApp() {
                     onEditAnchor = { navigate(Screen.Anchor(it)) },
                     onLibrary = { navigate(Screen.Library) },
                     onHelp = { navigate(Screen.Help) },
+                    onPlans = { requestPlanAction(PendingPlanAction.ShowPlans) },
+                    onSave = ::requestSave,
                     onSchedule = { navigate(Screen.Schedule) },
                     onToggleComplete = { activityId ->
                         commit(plan.copy(activities = plan.activities.map {
@@ -226,7 +409,10 @@ private fun SafeStartApp() {
                     onBack = ::goBack,
                     onInsert = { navigate(Screen.Activity(templateId = it)) },
                     onDelete = { id ->
-                        commit(plan.copy(reusableActivities = plan.reusableActivities.filterNot { it.id == id }))
+                        commit(
+                            plan.copy(reusableActivities = plan.reusableActivities.filterNot { it.id == id }),
+                            markPlanDirty = false
+                        )
                     }
                 )
                 Screen.Help -> HelpScreen(onBack = ::goBack)
@@ -236,14 +422,173 @@ private fun SafeStartApp() {
         if (showOnboarding) {
             OnboardingDialog {
                 showOnboarding = false
-                commit(plan.copy(onboardingSeen = true))
+                persist(
+                    workspace.copy(
+                        onboardingSeen = true,
+                        draftPlan = workspace.draftPlan?.copy(onboardingSeen = true)
+                    )
+                )
             }
+        }
+
+        pendingAction?.let { action ->
+            UnsavedPlanDialog(
+                planName = workspace.draftName,
+                canSave = planSaveError(plan) == null,
+                onSave = {
+                    pendingAction = null
+                    if (workspace.draftSourcePlanId == null) {
+                        nameDialog = NameDialogRequest.SaveDraft(afterSave = action)
+                    } else {
+                        val error = saveExistingPlan()
+                        if (error == null) performPlanAction(action) else notice = error
+                    }
+                },
+                onDiscard = {
+                    pendingAction = null
+                    performPlanAction(action)
+                },
+                onCancel = { pendingAction = null }
+            )
+        }
+
+        nameDialog?.let { request ->
+            val initialName = when (request) {
+                is NameDialogRequest.SaveDraft -> workspace.draftName.orEmpty()
+                is NameDialogRequest.Rename -> request.initialName
+                is NameDialogRequest.Duplicate -> request.initialName
+            }
+            PlanNameDialog(
+                title = when (request) {
+                    is NameDialogRequest.SaveDraft -> "Save plan"
+                    is NameDialogRequest.Rename -> "Rename plan"
+                    is NameDialogRequest.Duplicate -> "Duplicate plan"
+                },
+                initialName = initialName,
+                confirmLabel = when (request) {
+                    is NameDialogRequest.SaveDraft -> "Save"
+                    is NameDialogRequest.Rename -> "Rename"
+                    is NameDialogRequest.Duplicate -> "Duplicate"
+                },
+                onConfirm = { enteredName ->
+                    when (request) {
+                        is NameDialogRequest.SaveDraft -> {
+                            val error = saveNewPlan(enteredName)
+                            if (error == null) {
+                                nameDialog = null
+                                request.afterSave?.let(::performPlanAction)
+                            }
+                            error
+                        }
+                        is NameDialogRequest.Rename -> {
+                            val error = WorkspaceOperations.nameError(
+                                enteredName,
+                                workspace.savedPlans,
+                                ignoredPlanId = request.planId
+                            )
+                            if (error == null) {
+                                val trimmed = enteredName.trim()
+                                persist(
+                                    workspace.copy(
+                                        savedPlans = workspace.savedPlans.map { saved ->
+                                            if (saved.id == request.planId) {
+                                                saved.copy(name = trimmed, updatedAtMillis = System.currentTimeMillis())
+                                            } else {
+                                                saved
+                                            }
+                                        },
+                                        draftName = if (workspace.draftSourcePlanId == request.planId) {
+                                            trimmed
+                                        } else {
+                                            workspace.draftName
+                                        }
+                                    )
+                                )
+                                nameDialog = null
+                            }
+                            error
+                        }
+                        is NameDialogRequest.Duplicate -> {
+                            val error = WorkspaceOperations.nameError(enteredName, workspace.savedPlans)
+                            val source = workspace.savedPlans.find { it.id == request.planId }
+                            if (error == null) {
+                                source?.let { original ->
+                                    val now = System.currentTimeMillis()
+                                    val duplicate = SavedPlan(
+                                        name = enteredName.trim(),
+                                        plan = WorkspaceOperations.duplicatePlan(original.plan),
+                                        createdAtMillis = now,
+                                        updatedAtMillis = now
+                                    )
+                                    persist(workspace.copy(savedPlans = workspace.savedPlans + duplicate))
+                                    nameDialog = null
+                                }
+                            }
+                            error ?: if (source == null) "The plan could not be found." else null
+                        }
+                    }
+                },
+                onDismiss = { nameDialog = null }
+            )
+        }
+
+        deletePlanId?.let { planId ->
+            val saved = workspace.savedPlans.find { it.id == planId }
+            if (saved != null) {
+                AlertDialog(
+                    onDismissRequest = { deletePlanId = null },
+                    title = { Text("Delete ${saved.name}?") },
+                    text = {
+                        Text(
+                            if (workspace.draftSourcePlanId == planId) {
+                                "The saved plan and its current working draft will be deleted. Reusable activities will remain available."
+                            } else {
+                                "The saved plan will be deleted. Reusable activities will remain available."
+                            }
+                        )
+                    },
+                    confirmButton = {
+                        Button(onClick = {
+                            val withoutSaved = workspace.copy(
+                                savedPlans = workspace.savedPlans.filterNot { it.id == planId }
+                            )
+                            persist(
+                                if (workspace.draftSourcePlanId == planId) {
+                                    clearedDraft(withoutSaved)
+                                } else {
+                                    withoutSaved
+                                }
+                            )
+                            deletePlanId = null
+                        }) { Text("Delete") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { deletePlanId = null }) { Text("Cancel") }
+                    }
+                )
+            }
+        }
+
+        notice?.let { message ->
+            AlertDialog(
+                onDismissRequest = { notice = null },
+                title = { Text("Safe Start") },
+                text = { Text(message) },
+                confirmButton = { Button(onClick = { notice = null }) { Text("OK") } }
+            )
         }
     }
 }
 
 @Composable
-private fun AppHeader(title: String, onBack: (() -> Unit)? = null, action: (() -> Unit)? = null, actionLabel: String = "") {
+private fun AppHeader(
+    title: String,
+    onBack: (() -> Unit)? = null,
+    action: (() -> Unit)? = null,
+    actionLabel: String = "",
+    secondaryAction: (() -> Unit)? = null,
+    secondaryActionLabel: String = ""
+) {
     Row(
         modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 20.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -252,14 +597,195 @@ private fun AppHeader(title: String, onBack: (() -> Unit)? = null, action: (() -
             TextButton(onClick = onBack) { Text("Back") }
             Spacer(Modifier.width(6.dp))
         }
-        Text(title, fontSize = 24.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+        Text(title, fontSize = 24.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), maxLines = 1)
+        if (secondaryAction != null) TextButton(onClick = secondaryAction) { Text(secondaryActionLabel) }
         if (action != null) TextButton(onClick = action) { Text(actionLabel) }
     }
 }
 
 @Composable
+private fun PlansScreen(
+    workspace: WorkspaceState,
+    onContinueDraft: () -> Unit,
+    onNewPlan: () -> Unit,
+    onOpenPlan: (String) -> Unit,
+    onRenamePlan: (SavedPlan) -> Unit,
+    onDuplicatePlan: (SavedPlan) -> Unit,
+    onDeletePlan: (String) -> Unit,
+    onHelp: () -> Unit
+) {
+    Column(Modifier.fillMaxSize()) {
+        AppHeader("Plans", action = onHelp, actionLabel = "How it works")
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                Button(onClick = onNewPlan, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                    Text("Start a new plan")
+                }
+            }
+            if ((workspace.draftPlan != null).and(workspace.draftDirty)) {
+                item {
+                    Surface(
+                        onClick = onContinueDraft,
+                        color = Amber.copy(alpha = 0.24f),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                            Text("UNSAVED DRAFT", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text(workspace.draftName ?: "New plan", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            Text("Continue editing or choose another plan to decide what to do with it.", color = Muted)
+                        }
+                    }
+                }
+            }
+            if (workspace.savedPlans.isEmpty()) {
+                item {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("No saved plans yet", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                        Text("Create a plan, then save it with a unique name.", color = Muted, textAlign = TextAlign.Center)
+                    }
+                }
+            } else {
+                items(workspace.savedPlans.sortedByDescending { it.updatedAtMillis }, key = { it.id }) { saved ->
+                    SavedPlanCard(
+                        saved = saved,
+                        onOpen = { onOpenPlan(saved.id) },
+                        onRename = { onRenamePlan(saved) },
+                        onDuplicate = { onDuplicatePlan(saved) },
+                        onDelete = { onDeletePlan(saved.id) }
+                    )
+                }
+            }
+            item {
+                Text(
+                    "${workspace.reusableActivities.size} reusable activities available across all plans",
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    color = Muted,
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SavedPlanCard(
+    saved: SavedPlan,
+    onOpen: () -> Unit,
+    onRename: () -> Unit,
+    onDuplicate: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val lastAnchor = saved.plan.anchors.maxByOrNull { it.startMinute }
+    val completed = saved.plan.activities.count { it.completed }
+    Card(colors = CardDefaults.cardColors(containerColor = Paper), shape = RoundedCornerShape(18.dp)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(saved.name, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                    if (lastAnchor != null) {
+                        Text(
+                            "${PlannerEngine.formatTime(saved.plan.startMinute)} to ${PlannerEngine.formatTime(lastAnchor.startMinute)}",
+                            color = Muted,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+                Button(onClick = onOpen) { Text("Open") }
+            }
+            Text(
+                "${saved.plan.activities.size} activities · ${saved.plan.anchors.size} fixed times · $completed completed",
+                color = Muted,
+                fontSize = 12.sp
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                TextButton(onClick = onRename) { Text("Rename") }
+                TextButton(onClick = onDuplicate) { Text("Duplicate") }
+                TextButton(onClick = onDelete) { Text("Delete", color = Clay) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlanNameDialog(
+    title: String,
+    initialName: String,
+    confirmLabel: String,
+    onConfirm: (String) -> String?,
+    onDismiss: () -> Unit
+) {
+    var name by remember(initialName, title) { mutableStateOf(initialName) }
+    var error by remember(initialName, title) { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = {
+                    name = it
+                    error = null
+                },
+                singleLine = true,
+                label = { Text("Plan name") },
+                supportingText = { error?.let { Text(it, color = Clay) } }
+            )
+        },
+        confirmButton = {
+            Button(onClick = { error = onConfirm(name) }) { Text(confirmLabel) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+@Composable
+private fun UnsavedPlanDialog(
+    planName: String?,
+    canSave: Boolean,
+    onSave: () -> Unit,
+    onDiscard: () -> Unit,
+    onCancel: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("Save changes?") },
+        text = {
+            Text(
+                if (canSave) {
+                    "Save changes to ${planName ?: "this new plan"} before leaving?"
+                } else {
+                    "This plan cannot be saved until it has a valid Anchor. You can keep editing or discard it."
+                }
+            )
+        },
+        confirmButton = { Button(onClick = onSave, enabled = canSave) { Text("Save") } },
+        dismissButton = {
+            Row {
+                TextButton(onClick = onCancel) { Text("Keep editing") }
+                TextButton(onClick = onDiscard) { Text("Discard", color = Clay) }
+            }
+        }
+    )
+}
+
+@Composable
 private fun PlanScreen(
     plan: Plan,
+    planName: String?,
+    isDirty: Boolean,
+    statusMessage: String?,
     onStart: () -> Unit,
     onAddActivity: () -> Unit,
     onEditActivity: (String) -> Unit,
@@ -267,13 +793,21 @@ private fun PlanScreen(
     onEditAnchor: (String) -> Unit,
     onLibrary: () -> Unit,
     onHelp: () -> Unit,
+    onPlans: () -> Unit,
+    onSave: () -> Unit,
     onSchedule: () -> Unit,
     onToggleComplete: (String) -> Unit,
     onMove: (String, Int) -> String?
 ) {
     var moveError by remember { mutableStateOf<String?>(null) }
     Column(Modifier.fillMaxSize()) {
-        AppHeader("Safe Start", action = onHelp, actionLabel = "How it works")
+        AppHeader(
+            planName ?: "New plan",
+            action = onHelp,
+            actionLabel = "How it works",
+            secondaryAction = onPlans,
+            secondaryActionLabel = "Plans"
+        )
         if (plan.anchors.isEmpty()) {
             EmptyPlan(onStart, onAddAnchor)
             return@Column
@@ -284,6 +818,19 @@ private fun PlanScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        statusMessage ?: if (isDirty) "Unsaved changes" else "All changes saved",
+                        modifier = Modifier.weight(1f),
+                        color = if (isDirty) Clay else Moss,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Button(onClick = onSave, modifier = Modifier.width(112.dp)) { Text("Save") }
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("AVAILABLE FROM", color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold)

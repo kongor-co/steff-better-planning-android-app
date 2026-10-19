@@ -54,6 +54,29 @@ data class Plan(
     val onboardingSeen: Boolean = false
 )
 
+data class SavedPlan(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String,
+    val plan: Plan,
+    val createdAtMillis: Long,
+    val updatedAtMillis: Long
+)
+
+data class WorkspaceState(
+    val onboardingSeen: Boolean = false,
+    val savedPlans: List<SavedPlan> = emptyList(),
+    val reusableActivities: List<ReusableActivity> = emptyList(),
+    val draftPlan: Plan? = null,
+    val draftSourcePlanId: String? = null,
+    val draftName: String? = null,
+    val draftDirty: Boolean = false
+)
+
+data class WorkspaceLoadResult(
+    val state: WorkspaceState,
+    val notice: String? = null
+)
+
 data class PlanningWindow(
     val startMinute: Int,
     val endAnchor: Anchor,
